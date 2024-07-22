@@ -1,7 +1,7 @@
 import requests
 import configparser
-import json
 import csv
+import pandas as pd
 
 
 ## API CONSTANTS ##
@@ -30,7 +30,7 @@ TITLE = "/title.json"
 ## LOCAL CONSTANTS ##
 STAT_DATA_FILE = "weapon_stats.csv"
 WEAPON_DATA_FILE = "weapon_data.csv"
-
+TARGET_LEVEL = 100 # The level to get weapon stats for
 DEBUG = True # Debug log messages?
 
 
@@ -48,6 +48,10 @@ def main():
     # Fetch weapon data from API, and write data to CSV
     weapons_raw = call_api(TFD_API_URL_BASE + WEAPON)
     parse_weapons(weapons_raw, stats_map, WEAPON_DATA_FILE)
+
+    # Clean up weapons CSV
+    clear_empty_columns(WEAPON_DATA_FILE)
+    postprocess_columns(WEAPON_DATA_FILE)
 
 
 # Call the API and handle errors
@@ -76,17 +80,25 @@ def parse_weapons(weapons_raw, stats_map, filename):
         writer = csv.DictWriter(file, fieldnames=field_names)
         writer.writeheader()
         for weapon in weapons_raw:
-            writer.writerow(flatten_base_stats(weapon, stats_map))
+            writer.writerow(prune_nonTargetLevel(flatten_base_stats(weapon, stats_map)))
 
 
 # Flatten a dict that contains base stats into just a raw dict
 def flatten_base_stats(weapon, stats_map):
+    BASE_STAT = 'base_stat'
+    STAT_ID = 'stat_id'
+    STAT_VALUE = 'stat_value'
+
     flattened_stats = {}
+
+    for key, value in weapon.items():
+        if key != BASE_STAT:
+            flattened_stats[key] = value
     
-    if 'base_stat' in weapon:
-        for stat in weapon['base_stat']:
-            stat_id = stat.get('stat_id')
-            stat_value = stat.get('stat_value')
+    if BASE_STAT in weapon:
+        for stat in weapon[BASE_STAT]:
+            stat_id = stat.get(STAT_ID)
+            stat_value = stat.get(STAT_VALUE)
             if (stat_id is not None and stat_value is not None):
                 stat_name = stats_map.get(stat_id)
                 if (stat_name is not None):     
@@ -95,6 +107,62 @@ def flatten_base_stats(weapon, stats_map):
                     print(f"Stat with stat ID {stat_id} and stat value {stat_value} not found for weapon {weapon['weapon_name']}")   
     
     return flattened_stats
+
+
+# Acquire target level stats for all guns for gun attack
+def prune_nonTargetLevel(weapon, stats_map={}):
+    FIREARM_ATK = 'firearm_atk'
+    LEVEL = 'level'
+
+    pruned_stats = {}
+    for key, value in weapon.items():
+        if key != FIREARM_ATK:
+            pruned_stats[key] = value
+    
+    if FIREARM_ATK in weapon:
+        for item in weapon[FIREARM_ATK]:
+            if item['level'] == TARGET_LEVEL:
+                pruned_stats[FIREARM_ATK] = item['firearm'][0]['firearm_atk_value']
+    
+    return pruned_stats
+
+
+# Clear empty columns
+def clear_empty_columns(file):
+    df = pd.read_csv(file)
+    df_cleaned = df.dropna(axis=1, how='all')
+    df_cleaned.to_csv(file, index=False)
+
+
+# Order columns and drop some miscellany
+def postprocess_columns(file):
+    df = pd.read_csv(file)
+
+    # Drop image columns and weapon ID
+    df = df.drop(columns=['image_url', 'weapon_perk_ability_image_url', 'weapon_id'])
+
+    # Define the order of columns
+    starting_columns = [
+        'weapon_name',
+        'weapon_tier',
+        'weapon_type',
+        'weapon_rounds_type',
+        "firearm_atk"
+    ]
+    
+    ending_columns = [
+        'weapon_perk_ability_name',
+        'weapon_perk_ability_description'
+    ]
+
+    remaining_columns = [col for col in df.columns if col not in starting_columns and col not in ending_columns]
+    remaining_columns.sort()
+
+    final_columns = starting_columns + remaining_columns + ending_columns
+
+    df = df[final_columns]
+    df.to_csv(file, index=False)
+
 
 if __name__ == '__main__':
     main()
